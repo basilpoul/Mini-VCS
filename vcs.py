@@ -228,16 +228,39 @@ def diff(filename):
         for line in previous_lines[len(current_lines):]:
             print(f"- {line.strip()}")
 
-def checkout(commit_id, filename):
+def checkout(commit_id, filename=None):
     commit_path = os.path.join(COMMITS_DIR, commit_id)
-    file_path = os.path.join(commit_path, filename)
 
-    if not os.path.exists(file_path):
-        print(f"File '{filename}' not found in commit '{commit_id}'.")
+    if not os.path.exists(commit_path):
+        print(f"Commit '{commit_id}' not found.")
         return
 
-    shutil.copy2(file_path, filename)
-    print(f"Restored '{filename}' from commit {commit_id}.")
+    if filename:
+        file_path = os.path.join(commit_path, filename)
+        if not os.path.exists(file_path):
+            print(f"File '{filename}' not found in commit '{commit_id}'.")
+            return
+
+        # Only create directory if needed
+        dir_name = os.path.dirname(filename)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+
+        shutil.copy2(file_path, filename)
+        print(f"Restored '{filename}' from commit {commit_id}.")
+    else:
+        # Restore all files in the commit
+        for root, _, files in os.walk(commit_path):
+            for file in files:
+                rel_dir = os.path.relpath(root, commit_path)
+                target_dir = '.' if rel_dir == '.' else rel_dir
+                os.makedirs(target_dir, exist_ok=True)
+
+                src = os.path.join(root, file)
+                dest = os.path.join(target_dir, file)
+                shutil.copy2(src, dest)
+                print(f"Restored '{dest}' from commit {commit_id}.")
+
 
 def ensure_branch_dir():
     branches_dir = os.path.join(VCS_DIR, "branches")
@@ -437,10 +460,12 @@ def main():
             return
         diff(sys.argv[2])
     elif command == "checkout":
-        if len(sys.argv) < 4:
-            print("Usage: python vcs.py checkout <commit-id> <filename>")
+        if len(sys.argv) < 3:
+            print("Usage: python vcs.py checkout <commit-id> [<filename>]")
             return
-        checkout(sys.argv[2], sys.argv[3])
+        commit_id = sys.argv[2]
+        filename = sys.argv[3] if len(sys.argv) >= 4 else None
+        checkout(commit_id, filename)
     elif command == "branch" and len(sys.argv) == 3:
         branch_name = sys.argv[2]
         create_branch(branch_name)
