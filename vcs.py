@@ -5,6 +5,13 @@ import hashlib
 from datetime import datetime
 import shutil
 import uuid
+import click
+
+@click.group()
+@click.version_option("0.1.0")
+def cli():
+    """mini-vcs: A simple version control system."""
+    pass
 
 
 VCS_DIR = ".vcs"
