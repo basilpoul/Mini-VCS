@@ -18,6 +18,8 @@ VCS_DIR = ".vcs"
 COMMITS_DIR = os.path.join(VCS_DIR, "commits")
 INDEX_FILE = os.path.join(VCS_DIR, "index.json")
 LOG_FILE = os.path.join(VCS_DIR, "log.json")
+BRANCHES_DIR = os.path.join(VCS_DIR, "branches")  # <-- Add this
+HEAD_FILE = os.path.join(VCS_DIR, "HEAD")
 
 def ensure_repo():
     if not os.path.exists(VCS_DIR):
@@ -29,15 +31,22 @@ def init():
         print("Repository already initialized.")
         return
 
+    os.makedirs(VCS_DIR)
     os.makedirs(COMMITS_DIR)
+    os.makedirs(BRANCHES_DIR)
+
+    with open(HEAD_FILE, "w") as f:
+        f.write("ref: refs/heads/main")
+
+    # Create the main branch pointing to an empty state
+    with open(os.path.join(BRANCHES_DIR, "main"), "w") as f:
+        f.write("")
 
     with open(INDEX_FILE, "w") as f:
         json.dump([], f)
 
-    with open(LOG_FILE, "w") as f:
-        json.dump([], f)
+    print("Initialized empty VCS repository with main branch.")
 
-    print("Initialized empty VCS repository in .vcs/")
 
 def get_file_hash(filepath):
     hasher = hashlib.sha256()
@@ -85,8 +94,29 @@ def add(path):
     with open(INDEX_FILE, "w") as f:
         json.dump(index, f, indent=2)
 
+def get_current_branch():
+    if not os.path.exists(HEAD_FILE):
+        return None
+    with open(HEAD_FILE) as f:
+        ref = f.read().strip()
+    if ref.startswith("ref: "):
+        return ref[5:]
+    return None  # Detached HEAD
+
+def update_branch_head(commit_id):
+    ref = get_current_branch()
+    if ref:
+        ref_path = os.path.join(VCS_DIR, ref)
+        with open(ref_path, "w") as f:
+            f.write(commit_id)
+    else:
+        # Detached HEAD – update HEAD directly
+        with open(HEAD_FILE, "w") as f:
+            f.write(commit_id)
 
 def commit(message):
+    ensure_repo()
+
     with open(INDEX_FILE, "r") as f:
         index = json.load(f)
 
@@ -94,7 +124,7 @@ def commit(message):
         print("Nothing to commit.")
         return
 
-    commit_id = str(uuid.uuid4())[:8]  # Short unique ID
+    commit_id = str(uuid.uuid4())[:8]
     commit_dir = os.path.join(COMMITS_DIR, commit_id)
     os.makedirs(commit_dir)
 
@@ -105,8 +135,15 @@ def commit(message):
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    with open(LOG_FILE, "r") as f:
-        log = json.load(f)
+    # Load the correct branch log
+    branch = get_current_branch()
+    branch_log_file = os.path.join(BRANCHES_DIR, f"{branch}.json")
+
+    if os.path.exists(branch_log_file):
+        with open(branch_log_file, "r") as f:
+            log = json.load(f)
+    else:
+        log = []
 
     log_entry = {
         "id": commit_id,
@@ -117,7 +154,7 @@ def commit(message):
 
     log.append(log_entry)
 
-    with open(LOG_FILE, "w") as f:
+    with open(branch_log_file, "w") as f:
         json.dump(log, f, indent=2)
 
     # Clear staging area
@@ -125,6 +162,7 @@ def commit(message):
         json.dump([], f)
 
     print(f"Committed as {commit_id}: {message}")
+
 
 def show_log():
     if not os.path.exists(LOG_FILE):
@@ -297,6 +335,21 @@ def create_branch(branch_name):
 
     print(f"Created branch '{branch_name}'.")
 
+def clear_working_directory():
+    ignored_dirs = {".vcs", ".git", ".idea", ".venv", "__pycache__"}
+
+    for root, dirs, files in os.walk(".", topdown=True):
+        # Skip ignored directories
+        dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith(".")]
+
+        for file in files:
+            path = os.path.join(root, file)
+            # Skip files in ignored directories
+            if any(part in ignored_dirs for part in path.split(os.sep)):
+                continue
+            if os.path.isfile(path):
+                os.remove(path)
+
 def checkout_branch(branch_name):
     ensure_repo()
     ensure_branch_dir()
@@ -308,14 +361,32 @@ def checkout_branch(branch_name):
         print(f"Branch '{branch_name}' does not exist.")
         return
 
-    # Update HEAD
+    # Step 1: Update HEAD
     with open(os.path.join(VCS_DIR, "HEAD"), 'w') as f:
         f.write(branch_name)
 
-    # Update current log
-    shutil.copy(branch_log, LOG_FILE)
+    # Step 2: Clear working directory (optional safety)
+    clear_working_directory()
 
-    print(f"Switched to branch '{branch_name}'.")
+    # Step 3: Load latest commit of target branch
+    with open(branch_log, "r") as f:
+        log = json.load(f)
+
+    if not log:
+        print(f"Switched to branch '{branch_name}' (no commits yet).")
+        return
+
+    latest_commit = log[-1]
+    commit_id = latest_commit["id"]
+    commit_dir = os.path.join(COMMITS_DIR, commit_id)
+
+    # Step 4: Restore each file from commit to working directory
+    for filename in latest_commit["files"]:
+        src = os.path.join(commit_dir, os.path.basename(filename))
+        shutil.copy2(src, filename)
+
+    print(f"Switched to branch '{branch_name}'. Restored commit {commit_id}.")
+
 
 def list_branches():
     ensure_repo()
