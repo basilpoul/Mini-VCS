@@ -39,31 +39,45 @@ def get_file_hash(filepath):
         hasher.update(buf)
     return hasher.hexdigest()
 
-def add(filename):
-    if not os.path.exists(filename):
-        print(f"File '{filename}' not found.")
+def add(path):
+    if not os.path.exists(path):
+        print(f"Path '{path}' not found.")
         return
 
     with open(INDEX_FILE, "r") as f:
         index = json.load(f)
 
-    # Check if already staged
-    for entry in index:
-        if entry["filename"] == filename:
-            print(f"File '{filename}' is already staged.")
-            return
+    already_staged = {entry["filename"] for entry in index}
 
-    file_hash = get_file_hash(filename)
+    files_to_add = []
 
-    index.append({
-        "filename": filename,
-        "hash": file_hash
-    })
+    if os.path.isfile(path):
+        files_to_add.append(path)
+    else:
+        for root, _, files in os.walk(path):
+            if ".vcs" in root:
+                continue  # Skip internal repo data
+            for f in files:
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path)
+                if rel_path not in already_staged:
+                    files_to_add.append(rel_path)
+
+    if not files_to_add:
+        print("No new files to stage.")
+        return
+
+    for filepath in files_to_add:
+        file_hash = get_file_hash(filepath)
+        index.append({
+            "filename": filepath,
+            "hash": file_hash
+        })
+        print(f"Added '{filepath}' to staging area.")
 
     with open(INDEX_FILE, "w") as f:
         json.dump(index, f, indent=2)
 
-    print(f"Added '{filename}' to staging area.")
 
 def commit(message):
     with open(INDEX_FILE, "r") as f:
