@@ -12,6 +12,10 @@ COMMITS_DIR = os.path.join(VCS_DIR, "commits")
 INDEX_FILE = os.path.join(VCS_DIR, "index.json")
 LOG_FILE = os.path.join(VCS_DIR, "log.json")
 
+def ensure_repo():
+    if not os.path.exists(VCS_DIR):
+        print("Error: No VCS repository found. Run `vcs init` first.")
+        sys.exit(1)
 
 def init():
     if os.path.exists(VCS_DIR):
@@ -214,6 +218,170 @@ def checkout(commit_id, filename):
     shutil.copy2(file_path, filename)
     print(f"Restored '{filename}' from commit {commit_id}.")
 
+def ensure_branch_dir():
+    branches_dir = os.path.join(VCS_DIR, "branches")
+    if not os.path.exists(branches_dir):
+        os.makedirs(branches_dir)
+
+def get_current_branch():
+    head_file = os.path.join(VCS_DIR, "HEAD")
+    if os.path.exists(head_file):
+        with open(head_file, 'r') as f:
+            return f.read().strip()
+    return "main"  # default branch
+
+
+def create_branch(branch_name):
+    ensure_repo()
+    ensure_branch_dir()
+
+    branches_dir = os.path.join(VCS_DIR, "branches")
+    new_branch_log = os.path.join(branches_dir, f"{branch_name}.json")
+
+    if os.path.exists(new_branch_log):
+        print(f"Branch '{branch_name}' already exists.")
+        return
+
+    current_branch = get_current_branch()
+    current_log = os.path.join(branches_dir, f"{current_branch}.json")
+
+    if not os.path.exists(current_log):
+        # Create from global log.json fallback
+        shutil.copy(LOG_FILE, new_branch_log)
+    else:
+        shutil.copy(current_log, new_branch_log)
+
+    print(f"Created branch '{branch_name}'.")
+
+def checkout_branch(branch_name):
+    ensure_repo()
+    ensure_branch_dir()
+
+    branches_dir = os.path.join(VCS_DIR, "branches")
+    branch_log = os.path.join(branches_dir, f"{branch_name}.json")
+
+    if not os.path.exists(branch_log):
+        print(f"Branch '{branch_name}' does not exist.")
+        return
+
+    # Update HEAD
+    with open(os.path.join(VCS_DIR, "HEAD"), 'w') as f:
+        f.write(branch_name)
+
+    # Update current log
+    shutil.copy(branch_log, LOG_FILE)
+
+    print(f"Switched to branch '{branch_name}'.")
+
+def list_branches():
+    ensure_repo()
+    ensure_branch_dir()
+
+    branches_dir = os.path.join(VCS_DIR, "branches")
+    current = get_current_branch()
+
+    branches = [f[:-5] for f in os.listdir(branches_dir) if f.endswith(".json")]
+    branches.sort()
+
+    print("Branches:")
+    for b in branches:
+        if b == current:
+            print(f"* {b} (current)")
+        else:
+            print(f"  {b}")
+
+def add_file(filename):
+    ensure_repo()
+
+    if not os.path.exists(filename):
+        print(f"Error: {filename} does not exist.")
+        return
+
+    # Load index
+    if os.path.exists(INDEX_FILE):
+        with open(INDEX_FILE, 'r') as f:
+            index = json.load(f)
+    else:
+        index = []
+
+    # Add file if not already present
+    if filename not in index:
+        index.append(filename)
+        with open(INDEX_FILE, 'w') as f:
+            json.dump(index, f)
+
+def merge_branch(branch_name):
+    ensure_repo()
+    ensure_branch_dir()
+
+    current = get_current_branch()
+    if branch_name == current:
+        print("Cannot merge a branch into itself.")
+        return
+
+    branches_dir = os.path.join(VCS_DIR, "branches")
+    target_log_file = os.path.join(branches_dir, f"{branch_name}.json")
+    current_log_file = os.path.join(branches_dir, f"{current}.json")
+
+    if not os.path.exists(target_log_file):
+        print(f"Branch '{branch_name}' does not exist.")
+        return
+
+    with open(target_log_file, 'r') as f:
+        target_log = json.load(f)
+    with open(current_log_file, 'r') as f:
+        current_log = json.load(f)
+
+    if not target_log:
+        print(f"No commits found in branch '{branch_name}'.")
+        return
+
+    # Get latest commit from target
+    latest_commit = target_log[-1]
+    merged_files = []
+    conflicts = []
+
+    for file in latest_commit["files"]:
+        target_file_path = os.path.join(VCS_DIR, "commits", latest_commit["id"], file)
+
+        if not os.path.exists(file):
+            shutil.copy(target_file_path, file)
+            merged_files.append(file)
+        else:
+            # Conflict detection: compare with current branch version
+            with open(file, 'r') as f:
+                working_content = f.read()
+            with open(target_file_path, 'r') as f:
+                incoming_content = f.read()
+
+            if working_content.strip() != incoming_content.strip():
+                # Save conflicted version
+                conflict_file = f"{file}.conflict"
+                with open(conflict_file, 'w') as f:
+                    f.write("======= Incoming =======\n")
+                    f.write(incoming_content)
+                    f.write("\n======= Current =======\n")
+                    f.write(working_content)
+                conflicts.append(file)
+            else:
+                # Same content, skip
+                pass
+
+    # Commit merged files (if no conflict)
+    if conflicts:
+        print("\nMerge completed with conflicts:")
+        for c in conflicts:
+            print(f" - {c} => {c}.conflict")
+        print("Please resolve conflicts manually and then commit.")
+    else:
+        if merged_files:
+            for f in merged_files:
+                add_file(f)
+            commit(f"Merged from branch '{branch_name}'")
+        else:
+            print("Nothing to merge. Already up to date.")
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python vcs.py <command>")
@@ -252,6 +420,15 @@ def main():
             print("Usage: python vcs.py checkout <commit-id> <filename>")
             return
         checkout(sys.argv[2], sys.argv[3])
+    elif command == "branch" and len(sys.argv) == 3:
+        branch_name = sys.argv[2]
+        create_branch(branch_name)
+    elif command == "checkout-branch" and len(sys.argv) == 3:
+        checkout_branch(sys.argv[2])
+    elif command == "list-branches":
+        list_branches()
+    elif command == "merge" and len(sys.argv) == 3:
+        merge_branch(sys.argv[2])
     else:
         print(f"Unknown command: {command}")
 
