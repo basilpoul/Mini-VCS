@@ -35,20 +35,25 @@ def init():
 
     os.makedirs(VCS_DIR)
     os.makedirs(COMMITS_DIR)
-    os.makedirs(BRANCHES_DIR)
     os.makedirs(LOGS_DIR)
+    os.makedirs(os.path.join(VCS_DIR, "refs", "heads"))  # ✅ Ensure this exists
+    os.makedirs(BRANCHES_DIR)       # ✅ Add this line
 
+
+    # Create HEAD file pointing to main
     with open(HEAD_FILE, "w") as f:
         f.write("ref: refs/heads/main")
 
-    # Create the main branch pointing to an empty state
-    with open(os.path.join(BRANCHES_DIR, "main"), "w") as f:
-        f.write("")
+    # Initialize main branch ref with empty value (or latest commit)
+    with open(os.path.join(VCS_DIR, "refs", "heads", "main"), "w") as f:
+        f.write("")  # empty until first commit
 
-    with open(INDEX_FILE, "w") as f:
+    # Create empty log for main branch
+    with open(os.path.join(LOGS_DIR, "main.json"), "w") as f:
         json.dump([], f)
 
     print("Initialized empty VCS repository with main branch.")
+
 
 
 def get_file_hash(filepath):
@@ -124,12 +129,12 @@ def add(path):
 def get_current_branch_name():
     if not os.path.exists(HEAD_FILE):
         return None
-    with open(HEAD_FILE, "r") as f:
+    with open(HEAD_FILE) as f:
         ref = f.read().strip()
-    if ref.startswith("ref: "):
-        # Example: "ref: refs/heads/main" → return "main"
-        return ref.split("/")[-1]
-    return None  # Detached HEAD or commit ID directly
+    if ref.startswith("ref:"):
+        return os.path.basename(ref.split(":", 1)[1].strip())
+    return None
+
 
 
 def update_branch_head(commit_id):
@@ -413,7 +418,7 @@ def create_branch(branch_name):
     current_commit_file = os.path.join(VCS_DIR, "refs", "heads", current_branch)
 
     if not os.path.exists(current_commit_file):
-        print(f"Error: Current branch '{current_branch}' is invalid.")
+        print(f"Error: Current branch '{current_branch}' does not exist.")
         return
 
     # Create .vcs/refs/heads directory if it doesn't exist
@@ -490,7 +495,9 @@ def checkout_branch(branch_name):
     # Step 4: Restore each file from commit to working directory
     for filename in latest_commit["files"]:
         src = os.path.join(commit_dir, filename)
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        dir_path = os.path.dirname(filename)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
         shutil.copy2(src, filename)
 
     with open(INDEX_FILE, "w") as f:
@@ -499,12 +506,12 @@ def checkout_branch(branch_name):
     print(f"Switched to branch '{branch_name}'. Restored commit {commit_id}.")
 
 
+
 def list_branches():
     ensure_repo()
 
-    branches = sorted(
-        [b for b in os.listdir(BRANCHES_DIR) if not b.startswith('.')]
-    )
+    branches = os.listdir(os.path.join(VCS_DIR, "refs", "heads"))
+
     current = get_current_branch_name()
 
     if not branches:
@@ -609,7 +616,9 @@ def merge_branch(branch_name):
         if not os.path.exists(commit_file_path):
             continue  # skip missing files in the commit (optional safety)
 
-        os.makedirs(os.path.dirname(file), exist_ok=True)
+        dir_path = os.path.dirname(file)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
 
         if not os.path.exists(file):
             shutil.copy2(commit_file_path, file)
@@ -641,7 +650,6 @@ def merge_branch(branch_name):
             add_file(f)
         commit(f"Merged branch '{branch_name}' into '{current_branch}'")
         print(f"✔ Merge complete: {len(merged_files)} files merged and committed.")
-
 
 def main():
     if len(sys.argv) < 2:
